@@ -1,0 +1,24 @@
+name: rag
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.5-pg18-bookworm
+    environment:
+      POSTGRES_DB: rag
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag_dev_only
+    ports:
+      - "5432:5432"
+    volumes:
+      - rag-postgres-data:/var/lib/postgresql/18/docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  rag-postgres-data:
+
