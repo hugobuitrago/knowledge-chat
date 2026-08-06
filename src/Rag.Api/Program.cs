@@ -6,15 +6,19 @@ using Rag.Api.Middleware;
 using Rag.Api.OpenApi;
 using Rag.Api.RateLimiting;
 using Rag.Api.Security;
+using Rag.Infrastructure.Generation;
 using Rag.Infrastructure.Ingestion;
 using Rag.Infrastructure.Observability;
 using Rag.Infrastructure.Persistence;
+using Rag.Infrastructure.Retrieval;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
 builder.AddRagObservability("Rag.Api");
+builder.Services.AddRagGeneration(builder.Configuration, builder.Environment);
 builder.Services.AddRagPersistence(builder.Configuration);
 builder.Services.AddRagIngestion(builder.Configuration, builder.Environment);
+builder.Services.AddRagRetrieval(builder.Configuration);
 builder.Services.AddRagSecurity(builder.Configuration);
 builder.Services.AddRagRateLimiting(builder.Configuration);
 builder.Services.AddExceptionHandler<InvalidRequestExceptionHandler>();
@@ -57,8 +61,10 @@ app.MapHealthChecks(
     {
         Predicate = static registration => registration.Tags.Contains("dependencies"),
     });
+app.MapQueryEndpoints();
 app.MapKnowledgeBaseEndpoints();
 app.MapIngestionEndpoints();
+app.MapRetrievalEndpoints();
 
 app.Run();
 

@@ -12,6 +12,7 @@ public sealed class ProviderBoundaryTests
             typeof(IDocumentStorage),
             typeof(IEmbeddingProvider),
             typeof(IIngestionJobQueue),
+            typeof(IStreamingLanguageModelProvider),
             typeof(ILanguageModelProvider),
         ];
 

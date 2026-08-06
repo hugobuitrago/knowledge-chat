@@ -15,7 +15,7 @@ namespace Rag.IntegrationTests.PostgreSql;
 public sealed class IngestionProcessingTests(PostgreSqlFixture database)
 {
     [Fact]
-    public async Task Processing_persists_bounded_chunks_and_completes_without_activation()
+    public async Task Processing_persists_bounded_chunks_and_activates_version()
     {
         database.EmbeddingProvider.Reset();
         await ResetQueueAsync();
@@ -46,8 +46,7 @@ public sealed class IngestionProcessingTests(PostgreSqlFixture database)
             .ToArrayAsync();
 
         Assert.Equal(DocumentStatus.Indexed, document.Status);
-        Assert.Equal(KnowledgeBaseVersionStatus.Ready, version.Status);
-        Assert.NotEqual(KnowledgeBaseVersionStatus.Active, version.Status);
+        Assert.Equal(KnowledgeBaseVersionStatus.Active, version.Status);
         Assert.Equal(IngestionJobStatus.Completed, job.Status);
         Assert.True(chunks.Length >= 3);
         Assert.All(chunks, chunk => Assert.InRange(chunk.TokenCount, 1, 500));
@@ -171,8 +170,7 @@ public sealed class IngestionProcessingTests(PostgreSqlFixture database)
         Assert.NotEmpty(chunks);
         Assert.Equal(chunks.Length, chunks.Select(static chunk => chunk.ChunkIndex).Distinct().Count());
         Assert.Equal(IngestionJobStatus.Completed, completed.Status);
-        Assert.Equal(KnowledgeBaseVersionStatus.Ready, ready.Status);
-        Assert.NotEqual(KnowledgeBaseVersionStatus.Active, ready.Status);
+        Assert.Equal(KnowledgeBaseVersionStatus.Active, ready.Status);
     }
 
     private async Task ProcessNextJobAsync()

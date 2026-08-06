@@ -61,6 +61,11 @@ public static class IngestionExtensions
                     string.Equals(options.Provider, "Local", StringComparison.Ordinal),
                 "Only the Local storage provider is available, and it is restricted to Development.")
             .ValidateOnStart();
+        services
+            .AddOptions<VersionMaintenanceOptions>()
+            .Bind(configuration.GetSection(VersionMaintenanceOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
 
         services.AddSingleton<IDocumentStorage, LocalDocumentStorage>();
         services.AddSingleton<ITextChunker, ParagraphTextChunker>();
@@ -69,6 +74,8 @@ public static class IngestionExtensions
         services.AddScoped<IDocumentUploadService, DocumentUploadService>();
         services.AddScoped<IIngestionJobQueue, PostgresIngestionJobQueue>();
         services.AddScoped<IDocumentIngestionProcessor, DocumentIngestionProcessor>();
+        services.AddScoped<IKnowledgeBaseVersionActivator, KnowledgeBaseVersionActivator>();
+        services.AddScoped<IKnowledgeBaseVersionMaintenance, KnowledgeBaseVersionMaintenance>();
 
         return services;
     }
@@ -86,6 +93,7 @@ public static class IngestionExtensions
             .ValidateDataAnnotations()
             .ValidateOnStart();
         services.AddHostedService<IngestionWorker>();
+        services.AddHostedService<VersionMaintenanceWorker>();
         return services;
     }
 }

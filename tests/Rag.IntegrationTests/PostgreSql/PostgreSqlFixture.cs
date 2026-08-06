@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Rag.Application.Providers;
 using Rag.Infrastructure.Ingestion;
 using Rag.Infrastructure.Persistence;
+using Rag.Infrastructure.Retrieval;
 using Testcontainers.PostgreSql;
 
 namespace Rag.IntegrationTests.PostgreSql;
@@ -68,6 +69,7 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
         services.AddSingleton<IHostEnvironment>(environment);
         services.AddRagPersistence(configuration);
         services.AddRagIngestion(configuration, environment);
+        services.AddRagRetrieval(configuration);
         services.AddSingleton<CountingEmbeddingProvider>();
         services.AddSingleton<IEmbeddingProvider>(
             static provider =>

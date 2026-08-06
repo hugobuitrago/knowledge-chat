@@ -1,6 +1,6 @@
 # Rag
 
-Fundação de uma API RAG multi-tenant em .NET 10. O repositório contém um monólito modular com API e Worker implantáveis separadamente. Esta entrega implementa as Fases 0 a 5: fundação arquitetural, persistência PostgreSQL/pgvector, segurança máquina a máquina, upload streaming, fila com leases, chunking e embeddings. Ativação blue/green, retrieval e geração ainda não foram implementados.
+Fundação de uma API RAG multi-tenant em .NET 10. O repositório contém um monólito modular com API e Worker implantáveis separadamente. Esta entrega implementa as Fases 0 a 7: fundação arquitetural, persistência PostgreSQL/pgvector, segurança máquina a máquina, upload streaming, fila com leases, chunking, embeddings, ativação blue/green e retrieval híbrido. Geração de resposta ainda não foi implementada.
 
 ## Pré-requisitos
 
@@ -54,6 +54,7 @@ Endpoints atuais da API:
 - `POST /v1/knowledge-bases/{knowledgeBaseId}/documents`: recebe um `.txt` e cria versão, documento e job; exige `rag.ingest`;
 - `GET /v1/ingestions/{jobId}`: consulta o status do job dentro do tenant; exige `rag.ingest`;
 - `POST /v1/ingestions/{jobId}/retry`: recoloca jobs `Failed` ou `DeadLetter` na fila; exige `rag.ingest`;
+- `POST /v1/retrieve`: executa retrieval híbrido na versão ativa e retorna evidências com fontes; exige `rag.retrieve`;
 - `GET /openapi/v1.json`: documento OpenAPI da fundação.
 
 Respostas incluem `X-Request-ID`. Um identificador válido enviado nesse header é propagado; caso contrário, a API usa o identificador criado pelo host. Erros sem corpo são convertidos para RFC 9457 Problem Details com a extensão `requestId`.
@@ -79,6 +80,14 @@ Configurações usam `appsettings.json`, variáveis de ambiente com `__` ou outr
 | `Embedding__BatchSize` | sim | `32` | quantidade máxima de chunks por chamada |
 | `Embedding__MaxConcurrency` | sim | `2` | chamadas de embedding simultâneas por processo |
 | `Embedding__RequestTimeoutSeconds` | sim | `30` | timeout de cada batch |
+| `Generation__Provider` | sim | `Deterministic` | fake de geração disponível somente em Development/testes |
+| `Generation__Model` | sim | `deterministic-development-v1` | modelo informado na resposta |
+| `Generation__MaxContextTokens` | sim | `4000` | orçamento estimado para evidências |
+| `Generation__MaxHistoryMessages` | sim | `6` | máximo de mensagens anteriores |
+| `Generation__MaxHistoryCharacters` | sim | `8000` | orçamento de caracteres do histórico |
+| `Generation__MaxOutputTokens` | sim | `800` | limite solicitado ao provider |
+| `Generation__RequestTimeoutSeconds` | sim | `30` | timeout total da chamada ao LLM |
+| `Generation__FallbackMode` | sim | `EvidenceOnly` | `EvidenceOnly` ou `SecondaryProvider` |
 | `Storage__Provider` | sim | `Local` | somente `Local`, restrito a Development nesta fase |
 | `Storage__LocalPath` | sim | `../../.data/documents` | raiz dedicada do storage local |
 | `Uploads__MaxFileSizeBytes` | sim | `10485760` | tamanho máximo do conteúdo do arquivo |
@@ -89,6 +98,18 @@ Configurações usam `appsettings.json`, variáveis de ambiente com `__` ou outr
 | `Jobs__MaxRetryDelaySeconds` | sim | `300` | teto do backoff com jitter |
 | `Worker__MaxConcurrentJobs` | sim | `2` | consumidores concorrentes no processo Worker |
 | `Worker__PollIntervalMilliseconds` | sim | `500` | espera quando nenhum job está disponível |
+| `VersionMaintenance__Enabled` | sim | `true` | habilita o arquivamento periódico de versões `Ready` superadas |
+| `VersionMaintenance__IntervalMinutes` | sim | `60` | intervalo entre execuções da manutenção |
+| `VersionMaintenance__SupersededReadyAgeHours` | sim | `24` | idade mínima para arquivar uma versão `Ready` superada |
+| `VersionMaintenance__BatchSize` | sim | `100` | máximo de versões arquivadas por execução |
+| `Retrieval__VectorTopK` | sim | `20` | candidatos iniciais por distância cosseno |
+| `Retrieval__LexicalTopK` | sim | `20` | candidatos iniciais por full-text search |
+| `Retrieval__FinalTopK` | sim | `8` | resultados finais; permitido entre 5 e 8 |
+| `Retrieval__MaxResultsPerDocument` | sim | `2` | limite de chunks do mesmo documento na resposta |
+| `Retrieval__ReciprocalRankConstant` | sim | `60` | constante usada no Reciprocal Rank Fusion |
+| `Retrieval__MinimumScore` | sim | `0` | score RRF mínimo aceito |
+| `Retrieval__MaxQueryLength` | sim | `2000` | tamanho máximo da pergunta |
+| `Retrieval__TextSearchConfiguration` | sim | `simple` | configuração controlada igual à do `tsvector` persistido |
 | `RateLimiting__TenantPermitLimit` | sim | `100` | requisições permitidas por tenant em cada janela |
 | `RateLimiting__ChatbotPermitLimit` | sim | `50` | requisições permitidas por chatbot em cada janela |
 | `RateLimiting__WindowSeconds` | sim | `60` | duração da janela fixa, entre 1 e 3.600 segundos |
@@ -128,7 +149,7 @@ Escopos disponíveis:
 
 - `rag.admin`: administração de bases;
 - `rag.ingest`: upload, status e retry de ingestões;
-- `rag.retrieve`: reservado aos endpoints de consulta da Fase 7.
+- `rag.retrieve`: retrieval de evidências e geração baseada na versão ativa.
 
 O tenant nunca é aceito no corpo da requisição. JSON com membros desconhecidos, inclusive `tenantId`, recebe `400` em Problem Details. Credencial ausente ou inválida recebe `401`; credencial válida sem o escopo exigido recebe `403`.
 
@@ -181,9 +202,25 @@ O texto armazenado é relido como UTF-8 estrito e normalizado de forma determin�
 
 O provider recebe batches e todas as respostas são validadas contra modelo, dimensão, quantidade e tamanho dos vetores fixados na versão. Chamadas possuem timeout e um semáforo limita a concorrência. O provider `Deterministic` gera vetores normalizados e repetíveis para desenvolvimento e testes; ele não representa qualidade semântica e é bloqueado fora de Development.
 
-Antes de chamar o provider, o processador procura chunks do mesmo tenant com conteúdo, configuração, modelo e dimensão compatíveis. Vetores encontrados são reutilizados; conteúdos repetidos dentro do próprio processamento também geram somente uma chamada. A gravação substitui atomicamente os chunks daquele documento, marca o documento `Indexed`, deixa a versão `Ready` e conclui o job. A versão nunca é marcada `Active` nesta fase.
+Antes de chamar o provider, o processador procura chunks do mesmo tenant com conteúdo, configuração, modelo e dimensão compatíveis. Vetores encontrados são reutilizados; conteúdos repetidos dentro do próprio processamento também geram somente uma chamada. A transação final substitui os chunks, marca o documento `Indexed`, conclui o job, valida a versão inteira e a ativa. Uma versão `Active` anterior é arquivada na mesma transação; leitores observam integralmente a versão antiga até o commit e a nova depois dele.
 
 Falhas antes do commit não persistem chunks. Falhas transitórias mantêm documento e versão em processamento para retry; falhas permanentes ou esgotamento marcam documento e versão como `Failed`. O retry manual restaura os estados de preparação antes de recolocar o job na fila.
+
+Ativações concorrentes são serializadas por base com bloqueio de linha e protegidas também pelo índice único parcial. A migration instala um trigger que rejeita inserção, alteração ou exclusão de chunks pertencentes a uma versão `Active`. O Worker arquiva versões `Ready` antigas somente quando já existe uma versão ativa mais nova, conforme `VersionMaintenance`.
+
+## Geração baseada em evidências
+
+`POST /v1/query` exige `rag.retrieve`, executa o mesmo retrieval autorizado e envia ao modelo somente os chunks que cabem no orçamento configurado. O prompt identifica documentos como dados não confiáveis, proíbe conhecimento externo e exige IDs estruturados de citação. A API valida que toda citação pertence ao conjunto efetivamente enviado.
+
+Contexto insuficiente não chama o LLM. Timeout, erro, resposta vazia ou citação inválida retornam uma mensagem fixa, `degraded=true` e as evidências autorizadas. `Generation__FallbackMode=SecondaryProvider` permite uma tentativa em um adapter secundário registrado; se ele não existir ou falhar, o comportamento volta a `EvidenceOnly`. Streaming é uma capacidade opcional do provider e não altera o contrato HTTP do MVP. Consulte `docs/api/query.md` e o ADR 0010.
+
+## Retrieval híbrido
+
+`POST /v1/retrieve` exige `rag.retrieve` e recebe `knowledgeBaseId` e `query`; tenant e chatbot vêm somente da credencial. O contrato completo e um exemplo estão em `docs/api/retrieve.md`.
+
+A consulta gera um embedding e, em uma transação de leitura `RepeatableRead`, fixa a versão `Active` e executa top 20 por distância cosseno exata e top 20 por full-text search. A busca lexical usa a configuração controlada `simple`, `websearch_to_tsquery` e `ts_rank_cd`, preservando códigos, siglas e frases. Os rankings são unidos por Reciprocal Rank Fusion, deduplicados por chunk, limitados por documento e reduzidos ao top 8 padrão.
+
+Se o provider de embeddings falhar ou responder com modelo, dimensão ou vetor inválido, a estratégia vetorial é omitida, a lexical continua e a resposta informa `degraded=true`. O reranker do MVP é no-op; sua porta permite substituição futura sem alterar o contrato. O SQL usa parâmetros posicionais e aplica tenant, base, versão ativa e vínculo opcional do chatbot.
 
 ## Persistência
 
@@ -205,10 +242,11 @@ O esquema usa:
 - coluna `search_vector` gerada com configuração full-text `simple` e índice GIN;
 - chaves estrangeiras compostas para impedir relações cross-tenant;
 - índice parcial único para permitir somente uma versão `Active` por base;
+- trigger de banco que torna os chunks de versões `Active` imutáveis;
 - timestamps UTC preenchidos pela persistência;
 - `xmin` do PostgreSQL como token de concorrência otimista nas entidades mutáveis.
 
-Toda consulta a chunks deve informar `tenant_id`, `knowledge_base_id` e `version_id`. O helper atual torna esses três filtros obrigatórios. A busca híbrida e os endpoints de negócio permanecem fora desta fase.
+Toda consulta a chunks informa `tenant_id`, `knowledge_base_id` e `version_id`, além de confirmar o estado `Active`. O helper de persistência e o SQL de retrieval repetem esses filtros. HNSW permanece fora desta fase até existir benchmark com corpus representativo.
 
 Para criar uma migração futura:
 
@@ -236,12 +274,12 @@ docs/adr/
 
 Domain e Contracts não dependem de outros projetos. Application depende somente deles; Infrastructure implementa as portas; API e Worker fazem a composição e não se referenciam. Testes de arquitetura inspecionam todos os `ProjectReference` de produção.
 
-As portas atuais são `IEmbeddingProvider`, `ILanguageModelProvider`, `IDocumentStorage`, `IIngestionJobQueue` e `IClock`. Elas não selecionam fornecedor, endpoint ou credencial e todas as operações assíncronas aceitam cancelamento.
+As portas atuais são `IEmbeddingProvider`, `IChunkReranker`, `ILanguageModelProvider`, `IDocumentStorage`, `IIngestionJobQueue` e `IClock`. Elas não selecionam credencial real e todas as operações assíncronas aceitam cancelamento.
 
 ## Decisões e segurança
 
-As decisões estão em `docs/adr/0001` a `0008`. Classificação de dados, fronteiras de confiança, ameaças e controles presentes ou planejados estão em `docs/threat-model.md`.
+As decisões estão em `docs/adr/0001` a `0010`. Classificação de dados, fronteiras de confiança, ameaças e controles presentes ou planejados estão em `docs/threat-model.md`.
 
 ## Limites desta entrega
 
-Não há provisionamento HTTP de tenants/chaves, scanner antimalware, adapter de object storage ou provider semântico de produção, ativação de versão, retrieval, chamada de LLM, `/metrics` Prometheus ou testes de carga. Versões processadas terminam em `Ready`; a troca blue/green para `Active` pertence exclusivamente à Fase 6.
+Não há provisionamento HTTP de tenants/chaves, scanner antimalware, adapter de object storage, provider semântico de produção, `/metrics` Prometheus ou testes de carga. A geração da Fase 8 usa somente um fake determinístico em Development e não implementa resiliência ou fases posteriores.

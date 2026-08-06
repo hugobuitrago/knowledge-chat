@@ -17,6 +17,7 @@ internal sealed class DocumentIngestionProcessor(
     IDocumentStorage documentStorage,
     ITextChunker textChunker,
     IIngestionJobQueue jobQueue,
+    IKnowledgeBaseVersionActivator versionActivator,
     EmbeddingBatchExecutor embeddingExecutor,
     IClock clock,
     IOptions<EmbeddingMetadataOptions> embeddingOptions) :
@@ -334,6 +335,13 @@ internal sealed class DocumentIngestionProcessor(
 
         job.Complete(lease.LockToken);
         await dbContext.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await versionActivator
+            .ActivateAsync(
+                lease.TenantId,
+                version.KnowledgeBaseId,
+                version.Id,
+                cancellationToken)
+            .ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 

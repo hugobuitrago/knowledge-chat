@@ -25,4 +25,4 @@ O provider `Deterministic` é um fake de desenvolvimento e testes. Ele gera veto
 - Conteúdos compatíveis do mesmo tenant economizam chamadas de embedding sem criar um canal de deduplicação cross-tenant.
 - Offsets descrevem o texto normalizado, não os bytes do arquivo original.
 - O tokenizador lexical é estável e independente de fornecedor, mas sua contagem pode diferir da tokenização de um modelo externo; um adapter futuro deve manter o hash de configuração compatível apenas quando essa semântica for preservada.
-- A Fase 6 ainda precisa validar e ativar a versão atomicamente.
+- A Fase 6 passou a validar e ativar a versão no mesmo commit final, sem alterar as garantias de chunking e reutilização desta decisão.

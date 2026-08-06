@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using Rag.Application.Ingestion;
 using Rag.Application.Providers;
+using Rag.Infrastructure.Persistence;
 
 namespace Rag.Infrastructure.Ingestion;
 
@@ -92,6 +93,7 @@ internal sealed class IngestionWorker(
                 isTransient);
             try
             {
+                scope.ServiceProvider.GetRequiredService<RagDbContext>().ChangeTracker.Clear();
                 await queue
                     .FailAsync(lease, safeError, isTransient, stoppingToken)
                     .ConfigureAwait(false);
@@ -115,6 +117,7 @@ internal sealed class IngestionWorker(
                 providerException.IsTransient,
             IngestionProcessingException processingException =>
                 processingException.IsTransient,
+            VersionActivationException => false,
             IOException => true,
             TimeoutException => true,
             NpgsqlException postgresException => postgresException.IsTransient,
@@ -129,6 +132,7 @@ internal sealed class IngestionWorker(
             EmbeddingProviderException => "The embedding provider failed.",
             IngestionProcessingException processingException =>
                 processingException.Message,
+            VersionActivationException activationException => activationException.Message,
             IOException => "The document storage operation failed.",
             TimeoutException => "The ingestion operation timed out.",
             NpgsqlException or DbUpdateException =>

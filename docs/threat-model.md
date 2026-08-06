@@ -2,7 +2,7 @@
 
 ## Escopo
 
-Este documento cobre a API RAG, o Worker, PostgreSQL, object storage e provedores externos. Até a Fase 5, a fundação, persistência, autenticação máquina a máquina, upload, fila, chunking e embeddings estão implementados; controles dependentes de ativação e retrieval serão implementados nas fases correspondentes.
+Este documento cobre a API RAG, o Worker, PostgreSQL, object storage e provedores externos. Até a Fase 8, a fundação, persistência, autenticação máquina a máquina, upload, fila, chunking, embeddings, ativação blue/green, retrieval híbrido e geração baseada em evidências estão implementados.
 
 ## Classificação
 
@@ -28,13 +28,13 @@ O proprietário dos dados deve confirmar classificação, residência, retençã
 
 - **Acesso cross-tenant:** tenant vem exclusivamente da identidade autenticada; consultas de chunks exigem tenant, base e versão; chaves estrangeiras compostas rejeitam relações cross-tenant no banco.
 - **Elevação de privilégio:** escopos distintos para administração, ingestão e retrieval; negação por padrão.
-- **Injeção SQL:** comandos parametrizados e revisão específica do SQL de busca híbrida.
-- **Prompt injection em documentos:** documentos serão tratados como dados; respostas usarão apenas evidências e citações enviadas ao modelo.
+- **Injeção SQL:** comandos de retrieval usam SQL fixo com parâmetros posicionais; a configuração full-text é validada contra uma allowlist.
+- **Prompt injection em documentos:** documentos são serializados como dados não confiáveis, nunca como instruções de sistema; respostas aceitas usam apenas citações validadas contra as evidências enviadas.
 - **Upload malicioso ou exaustão:** somente `.txt`, streaming, limites de tamanho/quantidade/encoding e cálculo de hash.
 - **Replay e duplicação:** `Idempotency-Key`, hashes e restrições únicas nas operações mutáveis.
 - **Vazamento em logs/traces:** request ID e IDs técnicos são permitidos; documentos, prompts, credenciais e respostas integrais são proibidos por padrão.
-- **Indisponibilidade de provider:** timeout, cancelamento, circuit breaker e fallbacks definidos nas fases de resiliência.
-- **Versão parcial pesquisável:** ativação blue/green transacional e chunks imutáveis após prontidão.
+- **Indisponibilidade de provider:** timeout e cancelamento estão presentes; falha do embedding aciona fallback lexical e falha do LLM devolve evidências em estado degradado; circuit breaker pertence à fase de resiliência.
+- **Versão parcial pesquisável:** ativação blue/green transacional e chunks imutáveis após ativação.
 - **Comprometimento de dependency/supply chain:** centralização de versões, restore determinístico, analyzers e revisão de vulnerabilidades no CI futuro.
 
 ## Controles presentes na fundação
@@ -64,8 +64,17 @@ O proprietário dos dados deve confirmar classificação, residência, retençã
 - chunks persistem hashes de conteúdo e configuração, token count e offsets sem incluir conteúdo em logs;
 - reutilização de embedding exige o mesmo tenant, conteúdo, configuração, modelo e dimensão, impedindo deduplicação observável entre tenants;
 - chunks e estados finais são confirmados atomicamente após revalidar o lease; falha parcial não deixa uma versão `Active`;
+- a ativação valida a versão completa, bloqueia a base, arquiva a anterior e ativa a nova em uma transação; trigger impede mutação posterior dos chunks ativos;
+- retrieval resolve somente a versão `Active` dentro do tenant, base e chatbot autenticados e repete esse escopo em todo SQL;
+- consultas do usuário são parâmetros posicionais; `websearch_to_tsquery` recebe texto como dado e a configuração full-text é limitada a `simple`;
+- falha conhecida do embedding degrada para busca lexical sem registrar a pergunta ou o conteúdo recuperado; resultados incluem apenas IDs técnicos, fonte, posição, score e o chunk autorizado;
 - o fake determinístico é bloqueado fora de Development e não envia conteúdo para serviços externos.
+- geração serializa pergunta e evidências em JSON na mensagem de usuário; documentos nunca recebem papel de sistema e o prompt os declara dados não confiáveis;
+- histórico, contexto, saída e timeout possuem limites configuráveis, e o cancelamento da requisição é propagado ao provider;
+- respostas sem citações ou com IDs fora dos chunks enviados são rejeitadas e degradam para evidências autorizadas;
+- contexto insuficiente não chama o LLM; falha do provider não interfere em `/v1/retrieve`;
+- o provider secundário é opt-in e streaming é uma capacidade separada, sem ampliar o contrato do MVP;
 
 ## Pendências antes de produção
 
-Scanner antimalware, object storage com criptografia/identidade de workload, provider semântico com governança de dados, políticas gerais de resiliência, retenção/exclusão, rotação e revogação automatizadas de chaves, auditoria e testes de segurança ofensivos pertencem às fases posteriores do plano. Storage e embeddings atuais são estritamente de desenvolvimento. O rate limiting atual é local a cada réplica e não substitui proteção DDoS no edge. A defesa em profundidade no banco não substitui a autorização da aplicação nem eventual Row-Level Security antes de produção.
+Scanner antimalware, object storage com criptografia/identidade de workload, providers semânticos com governança de dados, políticas gerais de resiliência, retenção/exclusão, rotação e revogação automatizadas de chaves, auditoria e testes de segurança ofensivos pertencem às fases posteriores do plano. Storage, embeddings e geração atuais são estritamente de desenvolvimento. O rate limiting atual é local a cada réplica e não substitui proteção DDoS no edge. Retrieval e query devolvem conteúdo confidencial autorizado e exigem controles de saída e retenção compatíveis antes de produção.

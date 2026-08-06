@@ -39,7 +39,7 @@ public sealed class PersistenceTests(PostgreSqlFixture database)
             "SELECT extversion FROM pg_extension WHERE extname = 'vector'");
         string? vectorVersion = (string?)await extensionCommand.ExecuteScalarAsync(CancellationToken.None);
 
-        Assert.Equal(2, appliedMigrations.Length);
+        Assert.Equal(3, appliedMigrations.Length);
         Assert.Equal(9, tableCount);
         Assert.False(string.IsNullOrWhiteSpace(vectorVersion));
     }

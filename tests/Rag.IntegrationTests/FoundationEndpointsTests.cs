@@ -93,6 +93,18 @@ public sealed class FoundationEndpointsTests(PostgreSqlFixture database)
                 .GetProperty("requestBody")
                 .GetProperty("content")
                 .TryGetProperty("multipart/form-data", out _));
+        JsonElement retrievalOperation = document
+            .GetProperty("paths")
+            .GetProperty("/v1/retrieve")
+            .GetProperty("post");
+        Assert.True(retrievalOperation.GetProperty("responses").TryGetProperty("200", out _));
+        Assert.Equal(
+            "ApiKey",
+            retrievalOperation
+                .GetProperty("security")[0]
+                .EnumerateObject()
+                .Single()
+                .Name);
     }
 
     [Fact]
